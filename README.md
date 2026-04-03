@@ -43,7 +43,7 @@ On first launch the UI opens with an empty endpoint list. Press `l` to load an O
 | `a` | Open auth context switcher |
 | `b` | Open request body cache |
 | `s` | Save current body to cache |
-| `m` | Toggle mouse (off = terminal text selection, on = scrolling) |
+| `y` | Copy response to clipboard |
 | `q` / `ctrl+c` | Quit |
 
 ### Endpoint list
@@ -82,6 +82,17 @@ On first launch the UI opens with an empty endpoint list. Press `l` to load an O
 | `p` | Promote a scoped body to global |
 | `d` | Delete selected body |
 | `q` / `esc` | Close |
+
+### Response pane
+| Key | Action |
+|-----|--------|
+| `↑↓←→` / `hjkl` | Move cursor |
+| `v` | Enter visual selection mode (vim-style) |
+| `y` | Copy selection to clipboard (or full body if nothing selected) |
+| `esc` | Cancel selection |
+| `g` / `G` | Jump to top / bottom |
+| `0` / `$` | Jump to line start / end |
+| `ctrl+f` / `ctrl+b` | Page down / up |
 
 ---
 
@@ -134,6 +145,7 @@ curlx/
 │   ├── tui/            # Bubble Tea UI
 │   │   ├── app.go      # Root model, layout, key routing
 │   │   ├── nav.go      # Nav tree (spec → folder → endpoint nodes)
+│   │   ├── viewer.go   # Response viewer with cursor and visual selection
 │   │   └── messages.go # tea.Msg types, list items, commands
 │   ├── spec/
 │   │   ├── loader.go   # OpenAPI 3.x parsing via libopenapi
@@ -164,6 +176,8 @@ curlx/
 
 **HTTP client** (`internal/http`) — Thin wrapper around `net/http` that injects auth headers based on the active `auth.Context` type before executing the request.
 
+**Response viewer** (`internal/tui/viewer.go`) — A custom read-only text viewer replacing the standard viewport. Tracks a cursor position (line/col) and an optional selection anchor. On each render it walks the visible lines character-by-character, applying a reversed-video cursor style or a blue highlight to selected characters. Cursor movement keeps the view scrolled so the cursor is always visible. `v` marks the selection anchor at the current cursor; subsequent movement extends the selection. `y` extracts the text between anchor and cursor using normalised line/col bounds and writes it to the clipboard via `atotto/clipboard`.
+
 ---
 
 ## Tech Stack
@@ -171,7 +185,8 @@ curlx/
 | Layer | Library |
 |-------|---------|
 | TUI framework | [Bubble Tea](https://github.com/charmbracelet/bubbletea) |
-| TUI components | [Bubbles](https://github.com/charmbracelet/bubbles) (list, textinput, viewport) |
+| TUI components | [Bubbles](https://github.com/charmbracelet/bubbles) (list, textinput) |
+| Clipboard | [atotto/clipboard](https://github.com/atotto/clipboard) |
 | Styling | [Lip Gloss](https://github.com/charmbracelet/lipgloss) |
 | OpenAPI parsing | [libopenapi](https://github.com/pb33f/libopenapi) |
 | Git integration | [go-git](https://github.com/go-git/go-git) |
