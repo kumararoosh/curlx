@@ -1,0 +1,353 @@
+openapi: "3.0.3"
+info:
+  title: Task Manager API
+  description: A task and project management API for verifying multi-spec curlx functionality.
+  version: "1.0.0"
+
+servers:
+  - url: http://localhost:9091
+
+paths:
+  /auth/login:
+    post:
+      operationId: taskLogin
+      summary: Obtain a bearer token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Successful login
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+        "401":
+          description: Invalid credentials
+
+  /users:
+    get:
+      operationId: listUsers
+      summary: List all users
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: A list of users
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/User"
+    post:
+      operationId: createUser
+      summary: Create a new user
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserInput"
+      responses:
+        "201":
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+
+  /users/{id}:
+    get:
+      operationId: getUser
+      summary: Get a user by ID
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: A user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "404":
+          description: Not found
+
+  /projects:
+    get:
+      operationId: listProjects
+      summary: List all projects
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: A list of projects
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Project"
+    post:
+      operationId: createProject
+      summary: Create a new project
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProjectInput"
+      responses:
+        "201":
+          description: Project created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+
+  /projects/{id}:
+    get:
+      operationId: getProject
+      summary: Get a project by ID
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: A project
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+        "404":
+          description: Not found
+    delete:
+      operationId: deleteProject
+      summary: Delete a project
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: Not found
+
+  /tasks:
+    get:
+      operationId: listTasks
+      summary: List all tasks
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: project_id
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Filter tasks by project
+      responses:
+        "200":
+          description: A list of tasks
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Task"
+    post:
+      operationId: createTask
+      summary: Create a new task
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TaskInput"
+      responses:
+        "201":
+          description: Task created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+
+  /tasks/{id}:
+    get:
+      operationId: getTask
+      summary: Get a task by ID
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: A task
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+        "404":
+          description: Not found
+    put:
+      operationId: updateTask
+      summary: Update a task
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TaskInput"
+      responses:
+        "200":
+          description: Updated task
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+        "404":
+          description: Not found
+    delete:
+      operationId: deleteTask
+      summary: Delete a task
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: Not found
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+
+  schemas:
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          example: admin
+        password:
+          type: string
+          example: password
+
+    LoginResponse:
+      type: object
+      properties:
+        token:
+          type: string
+          example: "task-token-xyz789"
+
+    UserInput:
+      type: object
+      required: [name, email]
+      properties:
+        name:
+          type: string
+          example: "Jane Doe"
+        email:
+          type: string
+          example: "jane@example.com"
+
+    User:
+      allOf:
+        - $ref: "#/components/schemas/UserInput"
+        - type: object
+          properties:
+            id:
+              type: string
+              example: "1"
+
+    ProjectInput:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          example: "Website Redesign"
+        description:
+          type: string
+          example: "Redesign the company website"
+
+    Project:
+      allOf:
+        - $ref: "#/components/schemas/ProjectInput"
+        - type: object
+          properties:
+            id:
+              type: string
+              example: "1"
+
+    TaskInput:
+      type: object
+      required: [title]
+      properties:
+        title:
+          type: string
+          example: "Write unit tests"
+        description:
+          type: string
+          example: "Add coverage for the auth module"
+        project_id:
+          type: string
+          example: "1"
+        done:
+          type: boolean
+          example: false
+
+    Task:
+      allOf:
+        - $ref: "#/components/schemas/TaskInput"
+        - type: object
+          properties:
+            id:
+              type: string
+              example: "1"

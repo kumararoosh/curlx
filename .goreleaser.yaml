@@ -1,0 +1,61 @@
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: curlx
+    main: ./cmd/curlx
+    binary: curlx
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+
+archives:
+  - id: curlx
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        format: zip
+
+checksum:
+  name_template: "checksums.txt"
+
+brews:
+  - name: curlx
+    repository:
+      owner: arooshkumar
+      name: homebrew-curlx
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    homepage: "https://github.com/arooshkumar/curlx"
+    description: "A keyboard-driven TUI API client with OpenAPI spec support — Postman for the terminal."
+    license: "MIT"
+    install: |
+      bin.install "curlx"
+    test: |
+      system "#{bin}/curlx", "--version"
+
+release:
+  github:
+    owner: arooshkumar
+    name: curlx
+  draft: false
+  prerelease: auto
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
