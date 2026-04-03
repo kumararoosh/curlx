@@ -3,6 +3,8 @@ package tui
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/atotto/clipboard"
@@ -36,6 +38,38 @@ func cmdCopyToClipboard(content string) tea.Cmd {
 		return clipboardMsg{ok: err == nil}
 	}
 }
+
+// cmdOpenInPager suspends the TUI and opens content in $PAGER (default: less).
+// Inside the pager the user has full terminal control: text selection, search,
+// mouse — everything. The TUI resumes cleanly when the pager exits.
+func cmdOpenInPager(content string) tea.Cmd {
+	f, err := os.CreateTemp("", "curlx-response-*.json")
+	if err != nil {
+		return func() tea.Msg { return errMsg{err} }
+	}
+	if _, err := f.WriteString(content); err != nil {
+		f.Close()
+		os.Remove(f.Name())
+		return func() tea.Msg { return errMsg{err} }
+	}
+	f.Close()
+
+	pager := os.Getenv("PAGER")
+	if pager == "" {
+		pager = "less"
+	}
+
+	cmd := exec.Command(pager, f.Name())
+	return tea.ExecProcess(cmd, func(err error) tea.Msg {
+		os.Remove(f.Name())
+		if err != nil {
+			return errMsg{err}
+		}
+		return pagerClosedMsg{}
+	})
+}
+
+type pagerClosedMsg struct{}
 
 type specLoadedMsg struct {
 	spec   *spec.LoadedSpec

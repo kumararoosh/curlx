@@ -7,7 +7,6 @@ import (
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/textinput"
-	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -87,7 +86,7 @@ type App struct {
 	bodyInput    textinput.Model
 	activeInput  int  // 0 = url, 1 = body
 	inputFocused bool // true = typing mode; global shortcuts disabled
-	responseView viewport.Model
+	responseView viewer
 	responseBody string
 
 	// Loaded specs and nav tree
@@ -132,8 +131,8 @@ func NewApp() App {
 	bl := textinput.New()
 	bl.Placeholder = `{"key": "value"}`
 
-	// Response viewport
-	rv := viewport.New(0, 0)
+	// Response viewer
+	rv := newViewer(0, 0)
 
 	// Endpoint list
 	delegate := list.NewDefaultDelegate()
@@ -276,6 +275,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.statusMsg = "Clipboard unavailable"
 			a.statusIsOk = false
 		}
+
+	case pagerClosedMsg:
+		a.statusMsg = "Returned from pager"
+		a.statusIsOk = true
 	}
 
 	// Route key events by mode
@@ -395,6 +398,11 @@ func (a App) updateNormal(msg tea.Msg, cmds []tea.Cmd) (App, []tea.Cmd) {
 				return a, append(cmds, cmdCopyToClipboard(a.responseBody))
 			}
 
+		case "o":
+			if a.responseBody != "" {
+				return a, append(cmds, cmdOpenInPager(a.responseBody))
+			}
+
 		case "enter":
 			if a.activePane == paneEndpoints {
 				if nav, ok := a.endpointList.SelectedItem().(NavItem); ok {
@@ -460,9 +468,47 @@ func (a App) updateNormal(msg tea.Msg, cmds []tea.Cmd) (App, []tea.Cmd) {
 		a.endpointList, cmd = a.endpointList.Update(msg)
 		cmds = append(cmds, cmd)
 	case paneResponse:
-		var cmd tea.Cmd
-		a.responseView, cmd = a.responseView.Update(msg)
-		cmds = append(cmds, cmd)
+		if key, ok := msg.(tea.KeyMsg); ok {
+			switch key.String() {
+			case "up", "k":
+				a.responseView.Up()
+			case "down", "j":
+				a.responseView.Down()
+			case "left", "h":
+				a.responseView.Left()
+			case "right", "l":
+				a.responseView.Right()
+			case "ctrl+f", "pgdown":
+				a.responseView.PageDown()
+			case "ctrl+b", "pgup":
+				a.responseView.PageUp()
+			case "g":
+				a.responseView.GoToTop()
+			case "G":
+				a.responseView.GoToBottom()
+			case "0":
+				a.responseView.LineStart()
+			case "$":
+				a.responseView.LineEnd()
+			case "v":
+				a.responseView.ToggleSelect()
+				if a.responseView.selecting {
+					a.statusMsg = "Visual mode · move to select · y to copy · esc to cancel"
+				} else {
+					a.statusMsg = "Selection cleared"
+				}
+			case "y":
+				sel := a.responseView.SelectedText()
+				if sel == "" {
+					sel = a.responseBody
+				}
+				cmds = append(cmds, cmdCopyToClipboard(sel))
+				a.responseView.ClearSelect()
+			case "esc":
+				a.responseView.ClearSelect()
+				a.statusMsg = "Selection cancelled"
+			}
+		}
 	}
 
 	return a, cmds
@@ -758,8 +804,7 @@ func (a App) recalculateSizes() App {
 	rightW := a.width - a.width/3 - 4
 
 	a.endpointList.SetSize(leftW, bodyH-4)
-	a.responseView.Width = rightW - 2
-	a.responseView.Height = bodyH - bodyH/2 - 4
+	a.responseView.SetSize(rightW-2, bodyH-bodyH/2-4)
 	a.authCtxList.SetSize(a.width/2-6, a.height/2)
 	a.bodyCacheList.SetSize(a.width/2-6, a.height/2)
 	return a
