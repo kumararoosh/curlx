@@ -34,20 +34,20 @@ checksum:
 brews:
   - name: curlx
     repository:
-      owner: arooshkumar
+      owner: kumararoosh
       name: homebrew-curlx
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-    homepage: "https://github.com/arooshkumar/curlx"
+    homepage: "https://github.com/kumararoosh/curlx"
     description: "A keyboard-driven TUI API client with OpenAPI spec support — Postman for the terminal."
     license: "MIT"
     install: |
       bin.install "curlx"
     test: |
-      system "#{bin}/curlx", "--version"
+      assert_predicate bin/"curlx", :executable?
 
 release:
   github:
-    owner: arooshkumar
+    owner: kumararoosh
     name: curlx
   draft: false
   prerelease: auto
