@@ -267,6 +267,15 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case bodyListMsg:
 		a.bodyCacheList.SetItems(bodyItems(msg))
+
+	case clipboardMsg:
+		if msg.ok {
+			a.statusMsg = "Response copied to clipboard"
+			a.statusIsOk = true
+		} else {
+			a.statusMsg = "Clipboard unavailable"
+			a.statusIsOk = false
+		}
 	}
 
 	// Route key events by mode
@@ -379,6 +388,11 @@ func (a App) updateNormal(msg tea.Msg, cmds []tea.Cmd) (App, []tea.Cmd) {
 		case "ctrl+r":
 			if a.activePane == paneRequest {
 				return a, append(cmds, cmdSendRequest(a))
+			}
+
+		case "y":
+			if a.responseBody != "" {
+				return a, append(cmds, cmdCopyToClipboard(a.responseBody))
 			}
 
 		case "enter":

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -26,6 +27,15 @@ type responseMsg struct {
 type errMsg struct{ err error }
 
 func (e errMsg) Error() string { return e.err.Error() }
+
+type clipboardMsg struct{ ok bool }
+
+func cmdCopyToClipboard(content string) tea.Cmd {
+	return func() tea.Msg {
+		err := clipboard.WriteAll(content)
+		return clipboardMsg{ok: err == nil}
+	}
+}
 
 type specLoadedMsg struct {
 	spec   *spec.LoadedSpec

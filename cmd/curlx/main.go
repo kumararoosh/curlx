@@ -12,7 +12,6 @@ import (
 func main() {
 	p := tea.NewProgram(
 		tui.NewApp(),
-		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(),
 	)
 
