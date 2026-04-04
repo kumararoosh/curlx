@@ -157,8 +157,7 @@ func NewApp() App {
 	rv := newViewer(0, 0)
 
 	// Endpoint list
-	delegate := list.NewDefaultDelegate()
-	el := list.New([]list.Item{}, delegate, 0, 0)
+	el := list.New([]list.Item{}, newNavDelegate(), 0, 0)
 	el.Title = "Endpoints"
 	el.SetShowStatusBar(false)
 	el.SetFilteringEnabled(true)

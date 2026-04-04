@@ -2,9 +2,11 @@ package tui
 
 import (
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/arooshkumar/curlx/internal/spec"
@@ -37,49 +39,110 @@ var (
 	folderStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("33"))
 )
 
+// Title, Description, and FilterValue satisfy list.Item.
+// Rendering is handled by navDelegate; these are used only for filtering.
 func (n NavItem) Title() string {
 	switch n.kind {
-	case NavKindSpec:
-		arrow := "▼"
-		if n.collapsed {
-			arrow = "▶"
-		}
-		return specHeaderStyle.Render(arrow+" "+n.specTitle) + dimStyle.Render("  x to remove")
-	case NavKindFolder:
-		arrow := "▼"
-		if n.collapsed {
-			arrow = "▶"
-		}
-		return "  " + folderStyle.Render(arrow+" "+n.folderPath)
 	case NavKindEndpoint:
-		return "    " + n.ep.Title()
-	}
-	return ""
-}
-
-func (n NavItem) Description() string {
-	if n.kind == NavKindEndpoint && n.ep.Summary != "" {
-		return "      " + dimStyle.Render(n.ep.Summary)
-	}
-	if n.kind == NavKindSpec {
-		urlDisplay := dimStyle.Render(n.baseURL)
-		if n.baseURL != n.originalBaseURL {
-			urlDisplay = statusOK.Render(n.baseURL) + dimStyle.Render(" (overridden)")
-		}
-		return "    " + urlDisplay + dimStyle.Render("  · u to override")
-	}
-	return ""
-}
-
-func (n NavItem) FilterValue() string {
-	switch n.kind {
-	case NavKindEndpoint:
-		return n.ep.FilterValue()
+		return n.ep.Method + " " + n.ep.Path
 	case NavKindFolder:
 		return n.folderPath
 	default:
 		return n.specTitle
 	}
+}
+func (n NavItem) Description() string { return "" }
+func (n NavItem) FilterValue() string  { return n.Title() }
+
+// --- Custom delegate ---
+
+// navDelegate renders NavItems with explicit truncation and per-item layouts
+// so hints never overflow the pane width.
+type navDelegate struct{}
+
+func newNavDelegate() navDelegate { return navDelegate{} }
+
+// Height is 2: one line for the main label, one for the detail/hint line.
+func (d navDelegate) Height() int  { return 2 }
+func (d navDelegate) Spacing() int { return 0 }
+
+func (d navDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd { return nil }
+
+func (d navDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
+	nav, ok := item.(NavItem)
+	if !ok {
+		return
+	}
+
+	width := m.Width()
+	selected := index == m.Index()
+
+	var line1, line2 string
+
+	switch nav.kind {
+	case NavKindSpec:
+		arrow := "▼"
+		if nav.collapsed {
+			arrow = "▶"
+		}
+		label := arrow + " " + nav.specTitle
+		if selected {
+			line1 = specHeaderStyle.Render(trunc(label, width))
+		} else {
+			line1 = specHeaderStyle.Copy().UnsetBold().Render(trunc(label, width))
+		}
+
+		if selected {
+			// Show URL (green if overridden) then commands, all truncated to width.
+			urlPart := nav.baseURL
+			if nav.baseURL != nav.originalBaseURL {
+				urlPart = statusOK.Render(trunc(nav.baseURL, width/2)) +
+					dimStyle.Render(" (overridden)")
+				line2 = "  " + urlPart + "\n  " + dimStyle.Render(trunc("x remove · u override URL", width-2))
+			} else {
+				line2 = "  " + dimStyle.Render(trunc(urlPart, width/2)) +
+					"  " + dimStyle.Render(trunc("x remove · u override URL", width/2-2))
+			}
+		} else {
+			urlPart := nav.baseURL
+			if nav.baseURL != nav.originalBaseURL {
+				line2 = "  " + statusOK.Render(trunc(urlPart, width-2)) +
+					dimStyle.Render(" (overridden)")
+			} else {
+				line2 = "  " + dimStyle.Render(trunc(urlPart, width-2))
+			}
+		}
+
+	case NavKindFolder:
+		arrow := "▼"
+		if nav.collapsed {
+			arrow = "▶"
+		}
+		line1 = "  " + folderStyle.Render(trunc(arrow+" "+nav.folderPath, width-2))
+
+	case NavKindEndpoint:
+		line1 = "    " + nav.ep.Title()
+		if nav.ep.Summary != "" {
+			line2 = "      " + dimStyle.Render(trunc(nav.ep.Summary, width-6))
+		}
+	}
+
+	fmt.Fprintf(w, "%s\n%s", line1, line2)
+}
+
+// trunc truncates s to maxRunes runes, appending "…" if it was cut.
+func trunc(s string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= maxRunes {
+		return s
+	}
+	if maxRunes == 1 {
+		return "…"
+	}
+	return string(r[:maxRunes-1]) + "…"
 }
 
 // buildNavItems constructs the full (unfiltered) tree from all loaded specs.
