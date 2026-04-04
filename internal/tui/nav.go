@@ -21,13 +21,15 @@ const (
 
 // NavItem is a list.Item that represents a node in the spec tree.
 type NavItem struct {
-	kind       NavItemKind
-	specIdx    int
-	specTitle  string
-	specSource string
-	folderPath string
-	collapsed  bool
-	ep         *EndpointItem
+	kind            NavItemKind
+	specIdx         int
+	specTitle       string
+	specSource      string
+	baseURL         string
+	originalBaseURL string
+	folderPath      string
+	collapsed       bool
+	ep              *EndpointItem
 }
 
 var (
@@ -60,7 +62,11 @@ func (n NavItem) Description() string {
 		return "      " + dimStyle.Render(n.ep.Summary)
 	}
 	if n.kind == NavKindSpec {
-		return "    " + dimStyle.Render(n.specSource)
+		urlDisplay := dimStyle.Render(n.baseURL)
+		if n.baseURL != n.originalBaseURL {
+			urlDisplay = statusOK.Render(n.baseURL) + dimStyle.Render(" (overridden)")
+		}
+		return "    " + urlDisplay + dimStyle.Render("  · u to override")
 	}
 	return ""
 }
@@ -81,10 +87,12 @@ func buildNavItems(specs []*spec.LoadedSpec) []NavItem {
 	var all []NavItem
 	for i, s := range specs {
 		all = append(all, NavItem{
-			kind:       NavKindSpec,
-			specIdx:    i,
-			specTitle:  s.Title,
-			specSource: s.Source,
+			kind:            NavKindSpec,
+			specIdx:         i,
+			specTitle:       s.Title,
+			specSource:      s.Source,
+			baseURL:         s.BaseURL,
+			originalBaseURL: s.OriginalBaseURL,
 		})
 
 		// Group endpoints by the first path segment.
@@ -119,6 +127,7 @@ func buildNavItems(specs []*spec.LoadedSpec) []NavItem {
 					URL:         s.BaseURL + ep.Path,
 					Summary:     ep.Summary,
 					OperationID: ep.OperationID,
+					Params:      ep.Params,
 				}
 				all = append(all, NavItem{
 					kind:    NavKindEndpoint,

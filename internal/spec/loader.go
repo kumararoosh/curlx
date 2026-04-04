@@ -29,10 +29,11 @@ type Endpoint struct {
 
 // LoadedSpec is the parsed result of an OpenAPI document.
 type LoadedSpec struct {
-	Title     string
-	BaseURL   string
-	Endpoints []Endpoint
-	Source    string // original input string used to load this spec
+	Title           string
+	BaseURL         string // effective base URL; may be replaced by a user override
+	OriginalBaseURL string // base URL from the spec itself, used to restore after clearing an override
+	Endpoints       []Endpoint
+	Source          string // original input string used to load this spec
 }
 
 // FromFile loads and parses an OpenAPI spec from a local file path.
@@ -72,6 +73,7 @@ func parse(data []byte) (*LoadedSpec, error) {
 	// Extract base URL from the first server entry.
 	if len(v3.Model.Servers) > 0 {
 		loaded.BaseURL = strings.TrimRight(v3.Model.Servers[0].URL, "/")
+		loaded.OriginalBaseURL = loaded.BaseURL
 	}
 
 	// Walk all paths and methods.

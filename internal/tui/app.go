@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -16,12 +17,13 @@ import (
 	"github.com/arooshkumar/curlx/internal/spec"
 )
 
-// pane identifies which of the three main panels has focus.
+// pane identifies which panel has focus.
 type pane int
 
 const (
 	paneEndpoints pane = iota
-	paneRequest
+	paneRequest          // URL + params table
+	paneBody             // body textarea
 	paneResponse
 )
 
@@ -29,12 +31,22 @@ const (
 type appMode int
 
 const (
-	modeNormal    appMode = iota
-	modeLoadSpec          // l — enter a spec path or git URL
-	modeAuthSwitch        // a — pick an auth context
-	modeBodyCache         // b — pick a saved request body
-	modeNewAuth           // A — add a new auth context
+	modeNormal        appMode = iota
+	modeLoadSpec              // l
+	modeAuthSwitch            // a
+	modeBodyCache             // b
+	modeNewAuth               // A
+	modeBaseURLOverride       // u
 )
+
+// paramRow is one editable row in the params table.
+type paramRow struct {
+	key      string          // display label for spec-defined rows
+	paramIn  string          // "path", "query", or "" for custom
+	keyInput textinput.Model // editable key for custom (non-spec) rows
+	value    textinput.Model
+	fromSpec bool
+}
 
 // --- Styles ---
 
@@ -81,17 +93,20 @@ type App struct {
 	height     int
 
 	// Main panes
-	endpointList list.Model
-	urlInput     textinput.Model
-	bodyInput    textinput.Model
-	activeInput  int  // 0 = url, 1 = body
-	inputFocused bool // true = typing mode; global shortcuts disabled
-	responseView viewer
-	responseBody string
+	endpointList  list.Model
+	urlInput      textinput.Model
+	paramRows     []paramRow
+	paramFocused  int
+	paramSubFocus int  // 0=key (custom rows), 1=value
+	bodyInput     textarea.Model
+	activeInput   int  // 0=url, 1=params (within paneRequest)
+	inputFocused  bool // true = typing mode
+	responseView  viewer
+	responseBody  string
 
 	// Loaded specs and nav tree
-	loadedSpecs  []*spec.LoadedSpec
-	allNavItems  []NavItem
+	loadedSpecs []*spec.LoadedSpec
+	allNavItems []NavItem
 
 	// Persistent config
 	cfg *config.Config
@@ -112,8 +127,9 @@ type App struct {
 	bodyCacheList list.Model
 	bodyCache     *cache.Cache
 
-	// Mouse
-	mouseEnabled bool
+	// Overlay — base URL override
+	baseURLInput       textinput.Model
+	overrideTargetIdx  int // index into loadedSpecs
 
 	// Status bar
 	statusMsg  string
@@ -127,9 +143,15 @@ func NewApp() App {
 	ul.Placeholder = "https://api.example.com/v1/endpoint"
 	ul.Focus()
 
-	// Body input
-	bl := textinput.New()
-	bl.Placeholder = `{"key": "value"}`
+	// Body textarea
+	ta := textarea.New()
+	ta.Placeholder = `{"key": "value"}`
+	ta.CharLimit = 0
+	ta.ShowLineNumbers = false
+	ta.FocusedStyle.Base = lipgloss.NewStyle()
+	ta.BlurredStyle.Base = lipgloss.NewStyle()
+	ta.SetWidth(50)
+	ta.SetHeight(6)
 
 	// Response viewer
 	rv := newViewer(0, 0)
@@ -145,13 +167,17 @@ func NewApp() App {
 	si := textinput.New()
 	si.Placeholder = "/path/to/openapi.yaml  or  https://github.com/org/repo/.../spec.yaml"
 
+	// Base URL override input
+	bu := textinput.New()
+	bu.Placeholder = "https://my-server:8080"
+
 	// Auth context list overlay
 	al := list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0)
 	al.Title = "Auth Contexts  (enter to select · A to add)"
 	al.SetShowStatusBar(false)
 	al.KeyMap.Quit.SetEnabled(false)
 
-	// New auth form inputs: name, type, token, header key
+	// New auth form inputs
 	newAuthFields := []string{"Name", "Type (bearer|apikey|basic)", "Token", "Header Key (apikey only)"}
 	newAuthInputs := make([]textinput.Model, len(newAuthFields))
 	for i, ph := range newAuthFields {
@@ -167,13 +193,13 @@ func NewApp() App {
 	bc.SetShowStatusBar(false)
 	bc.KeyMap.Quit.SetEnabled(false)
 
-	// Auth store (graceful degradation if unavailable)
+	// Auth store
 	store, err := auth.NewStore(machinePassphrase())
 	if err != nil {
 		store = nil
 	}
 
-	// Body cache (graceful degradation)
+	// Body cache
 	bodyCache, err := cache.Open()
 	if err != nil {
 		bodyCache = nil
@@ -190,17 +216,17 @@ func NewApp() App {
 		activePane:    paneEndpoints,
 		endpointList:  el,
 		urlInput:      ul,
-		bodyInput:     bl,
+		bodyInput:     ta,
 		responseView:  rv,
 		specPathInput: si,
+		baseURLInput:  bu,
 		authCtxList:   al,
 		newAuthInputs: newAuthInputs,
 		bodyCacheList: bc,
 		authStore:     store,
 		bodyCache:     bodyCache,
-		cfg:           cfg,
-		mouseEnabled:  true,
-		statusMsg:     "l load spec · a auth · b bodies · Tab switch pane · ctrl+r send · m toggle mouse",
+		cfg:       cfg,
+		statusMsg: "l load spec · a auth · b bodies · tab switch pane · cmd+r send",
 	}
 }
 
@@ -239,7 +265,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.statusIsOk = false
 
 	case specLoadedMsg:
-		// Replace existing entry for same source, otherwise append.
+		// Apply any persisted base URL override before storing the spec.
+		if a.cfg != nil {
+			if override, ok := a.cfg.GetBaseURLOverride(msg.source); ok {
+				msg.spec.BaseURL = override
+			}
+		}
 		replaced := false
 		for i, s := range a.loadedSpecs {
 			if s.Source == msg.source {
@@ -281,7 +312,6 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.statusIsOk = true
 	}
 
-	// Route key events by mode
 	switch a.mode {
 	case modeLoadSpec:
 		a, cmds = a.updateLoadSpec(msg, cmds)
@@ -291,6 +321,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a, cmds = a.updateNewAuth(msg, cmds)
 	case modeBodyCache:
 		a, cmds = a.updateBodyCache(msg, cmds)
+	case modeBaseURLOverride:
+		a, cmds = a.updateBaseURLOverride(msg, cmds)
 	default:
 		a, cmds = a.updateNormal(msg, cmds)
 	}
@@ -299,8 +331,6 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (a App) updateNormal(msg tea.Msg, cmds []tea.Cmd) (App, []tea.Cmd) {
-	// When an input is focused, route all keys directly to it.
-	// Only esc and ctrl+c escape input mode.
 	if a.inputFocused {
 		if key, ok := msg.(tea.KeyMsg); ok {
 			switch key.String() {
@@ -309,52 +339,60 @@ func (a App) updateNormal(msg tea.Msg, cmds []tea.Cmd) (App, []tea.Cmd) {
 			case "esc":
 				a.inputFocused = false
 				a.urlInput.Blur()
+				a = a.blurAllParamRows()
 				a.bodyInput.Blur()
-				a.statusMsg = "Command mode · tab to switch pane · enter to type · ctrl+r to send"
+				a.statusMsg = "Command mode · tab to switch pane · ctrl+r to send"
 				return a, cmds
 			case "tab":
-				// Toggle between URL and body while staying in typing mode.
-				a.activeInput = 1 - a.activeInput
-				if a.activeInput == 0 {
-					a.urlInput.Focus()
-					a.bodyInput.Blur()
-				} else {
-					a.bodyInput.Focus()
+				if a.activePane == paneBody {
+					// let textarea handle tab naturally
+				} else if a.activeInput == 0 {
+					// URL → params table
+					a.activeInput = 1
 					a.urlInput.Blur()
+					if len(a.paramRows) > 0 {
+						a = a.syncParamRowFocus()
+					}
+					return a, cmds
+				} else {
+					// Advance within params table
+					a = a.advanceParamFocus()
+					return a, cmds
 				}
-				return a, cmds
+			case "shift+tab":
+				if a.activePane != paneBody {
+					if a.activeInput == 1 {
+						a = a.retreatParamFocus()
+						// If retreated past the first row, go back to URL
+						// (retreatParamFocus handles staying in table)
+					} else {
+						// URL and shift+tab — stay on URL
+					}
+					return a, cmds
+				}
 			}
 		}
-		// Forward all other keystrokes to the active input.
+		// Forward to active input
 		var cmd tea.Cmd
-		if a.activeInput == 0 {
+		if a.activePane == paneBody {
+			a.bodyInput, cmd = a.bodyInput.Update(msg)
+		} else if a.activeInput == 0 {
 			a.urlInput, cmd = a.urlInput.Update(msg)
 		} else {
-			a.bodyInput, cmd = a.bodyInput.Update(msg)
+			a, cmd = a.updateParamsTableInput(msg)
 		}
 		return a, append(cmds, cmd)
 	}
 
-	// Command mode — single-key shortcuts active.
+	// Command mode
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c", "q":
 			return a, append(cmds, tea.Quit)
 
-		case "m":
-			a.mouseEnabled = !a.mouseEnabled
-			if a.mouseEnabled {
-				a.statusMsg = "Mouse enabled · m to disable for text selection"
-				a.statusIsOk = true
-				return a, append(cmds, tea.EnableMouseCellMotion)
-			}
-			a.statusMsg = "Mouse disabled · drag to select · m to re-enable"
-			a.statusIsOk = false
-			return a, append(cmds, tea.DisableMouse)
-
 		case "tab":
-			a.activePane = (a.activePane + 1) % 3
+			a.activePane = (a.activePane + 1) % 4
 
 		case "l":
 			a.mode = modeLoadSpec
@@ -388,8 +426,8 @@ func (a App) updateNormal(msg tea.Msg, cmds []tea.Cmd) (App, []tea.Cmd) {
 				}
 			}
 
-		case "ctrl+r":
-			if a.activePane == paneRequest {
+		case "ctrl+r", "super+r":
+			if a.activePane == paneRequest || a.activePane == paneBody {
 				return a, append(cmds, cmdSendRequest(a))
 			}
 
@@ -403,20 +441,32 @@ func (a App) updateNormal(msg tea.Msg, cmds []tea.Cmd) (App, []tea.Cmd) {
 				return a, append(cmds, cmdOpenInPager(a.responseBody))
 			}
 
+		case "d":
+			// Delete focused param row in command mode
+			if a.activePane == paneRequest && len(a.paramRows) > 0 {
+				a.paramRows = append(a.paramRows[:a.paramFocused], a.paramRows[a.paramFocused+1:]...)
+				if a.paramFocused >= len(a.paramRows) && a.paramFocused > 0 {
+					a.paramFocused--
+				}
+			}
+
 		case "enter":
 			if a.activePane == paneEndpoints {
 				if nav, ok := a.endpointList.SelectedItem().(NavItem); ok {
 					switch nav.kind {
 					case NavKindSpec, NavKindFolder:
-						// Toggle collapse.
 						a.allNavItems = toggleNavItem(a.allNavItems, nav)
 						a.endpointList.SetItems(visibleNavItems(a.allNavItems))
 					case NavKindEndpoint:
 						a.urlInput.SetValue(nav.ep.URL)
+						a.paramRows = specParamRows(nav.ep.Params)
+						a.paramFocused = 0
+						a.paramSubFocus = 1
 						a.activePane = paneRequest
 						a.activeInput = 0
 						a.inputFocused = true
 						a.urlInput.Focus()
+						a = a.blurAllParamRows()
 						a.bodyInput.Blur()
 						a.statusMsg = "Typing mode · esc to return to commands"
 					}
@@ -425,21 +475,58 @@ func (a App) updateNormal(msg tea.Msg, cmds []tea.Cmd) (App, []tea.Cmd) {
 				a.inputFocused = true
 				a.activeInput = 0
 				a.urlInput.Focus()
+				a = a.blurAllParamRows()
 				a.bodyInput.Blur()
 				a.statusMsg = "Typing mode · esc to return to commands"
+			} else if a.activePane == paneBody {
+				a.inputFocused = true
+				var cmd tea.Cmd
+				cmd = a.bodyInput.Focus()
+				a.urlInput.Blur()
+				a = a.blurAllParamRows()
+				a.statusMsg = "Body mode · esc to return to commands"
+				return a, append(cmds, cmd)
 			}
 
-		case "i":
+		case "p":
+			// Jump to params table in request pane
 			if a.activePane == paneRequest {
 				a.inputFocused = true
 				a.activeInput = 1
-				a.bodyInput.Focus()
 				a.urlInput.Blur()
-				a.statusMsg = "Typing mode · esc to return to commands"
+				a.bodyInput.Blur()
+				a = a.syncParamRowFocus()
+				a.statusMsg = "Params mode · tab advance · d delete · esc command mode"
+			}
+
+		case "i":
+			// Jump to body pane
+			a.activePane = paneBody
+			a.inputFocused = true
+			var cmd tea.Cmd
+			cmd = a.bodyInput.Focus()
+			a.urlInput.Blur()
+			a = a.blurAllParamRows()
+			a.statusMsg = "Body mode · esc to return to commands"
+			return a, append(cmds, cmd)
+
+		case "u":
+			if a.activePane == paneEndpoints {
+				if nav, ok := a.endpointList.SelectedItem().(NavItem); ok && nav.kind == NavKindSpec {
+					for i, s := range a.loadedSpecs {
+						if s.Source == nav.specSource {
+							a.overrideTargetIdx = i
+							break
+						}
+					}
+					a.baseURLInput.SetValue(a.loadedSpecs[a.overrideTargetIdx].BaseURL)
+					a.baseURLInput.Focus()
+					a.mode = modeBaseURLOverride
+					return a, cmds
+				}
 			}
 
 		case "x":
-			// Remove the selected spec from the tree.
 			if a.activePane == paneEndpoints {
 				if nav, ok := a.endpointList.SelectedItem().(NavItem); ok && nav.kind == NavKindSpec {
 					newSpecs := a.loadedSpecs[:0]
@@ -461,7 +548,7 @@ func (a App) updateNormal(msg tea.Msg, cmds []tea.Cmd) (App, []tea.Cmd) {
 		}
 	}
 
-	// Delegate navigation to the focused pane (command mode only).
+	// Delegate navigation to focused pane (command mode only).
 	switch a.activePane {
 	case paneEndpoints:
 		var cmd tea.Cmd
@@ -513,6 +600,129 @@ func (a App) updateNormal(msg tea.Msg, cmds []tea.Cmd) (App, []tea.Cmd) {
 
 	return a, cmds
 }
+
+// updateParamsTableInput routes a message to the focused param row input.
+// Returns the updated App and any tea.Cmd.
+func (a App) updateParamsTableInput(msg tea.Msg) (App, tea.Cmd) {
+	if len(a.paramRows) == 0 {
+		return a, nil
+	}
+	row := a.paramRows[a.paramFocused]
+	var cmd tea.Cmd
+	if !row.fromSpec && a.paramSubFocus == 0 {
+		row.keyInput, cmd = row.keyInput.Update(msg)
+	} else {
+		row.value, cmd = row.value.Update(msg)
+	}
+	a.paramRows[a.paramFocused] = row
+	return a, cmd
+}
+
+// --- Param row helpers ---
+
+func (a App) blurAllParamRows() App {
+	for i := range a.paramRows {
+		a.paramRows[i].keyInput.Blur()
+		a.paramRows[i].value.Blur()
+	}
+	return a
+}
+
+func (a App) syncParamRowFocus() App {
+	a = a.blurAllParamRows()
+	if len(a.paramRows) == 0 {
+		return a
+	}
+	if a.paramFocused >= len(a.paramRows) {
+		a.paramFocused = len(a.paramRows) - 1
+	}
+	if !a.paramRows[a.paramFocused].fromSpec && a.paramSubFocus == 0 {
+		a.paramRows[a.paramFocused].keyInput.Focus()
+	} else {
+		a.paramRows[a.paramFocused].value.Focus()
+	}
+	return a
+}
+
+func (a App) advanceParamFocus() App {
+	if len(a.paramRows) == 0 {
+		return a
+	}
+	a = a.blurAllParamRows()
+	row := a.paramRows[a.paramFocused]
+	// If on a custom row's key, advance to its value.
+	if !row.fromSpec && a.paramSubFocus == 0 {
+		a.paramSubFocus = 1
+		a.paramRows[a.paramFocused].value.Focus()
+		return a
+	}
+	// Advance to the next row.
+	a.paramFocused++
+	if a.paramFocused >= len(a.paramRows) {
+		// Append a new empty row and advance to it.
+		a.paramRows = append(a.paramRows, newCustomParamRow())
+	}
+	if a.paramRows[a.paramFocused].fromSpec {
+		a.paramSubFocus = 1
+		a.paramRows[a.paramFocused].value.Focus()
+	} else {
+		a.paramSubFocus = 0
+		a.paramRows[a.paramFocused].keyInput.Focus()
+	}
+	return a
+}
+
+func (a App) retreatParamFocus() App {
+	if len(a.paramRows) == 0 {
+		return a
+	}
+	a = a.blurAllParamRows()
+	// If on a custom row's value, go back to its key.
+	if !a.paramRows[a.paramFocused].fromSpec && a.paramSubFocus == 1 {
+		a.paramSubFocus = 0
+		a.paramRows[a.paramFocused].keyInput.Focus()
+		return a
+	}
+	if a.paramFocused > 0 {
+		a.paramFocused--
+		a.paramSubFocus = 1
+		a.paramRows[a.paramFocused].value.Focus()
+	}
+	return a
+}
+
+func newCustomParamRow() paramRow {
+	ki := textinput.New()
+	ki.Placeholder = "key"
+	ki.Width = paramKeyColW
+	vi := textinput.New()
+	vi.Placeholder = "value"
+	return paramRow{
+		paramIn:  "query",
+		keyInput: ki,
+		value:    vi,
+		fromSpec: false,
+	}
+}
+
+const paramKeyColW = 18
+
+func specParamRows(params []spec.Param) []paramRow {
+	rows := make([]paramRow, len(params))
+	for i, p := range params {
+		vi := textinput.New()
+		vi.Placeholder = "value"
+		rows[i] = paramRow{
+			key:      p.Name,
+			paramIn:  p.In,
+			value:    vi,
+			fromSpec: true,
+		}
+	}
+	return rows
+}
+
+// --- Overlay update handlers ---
 
 func (a App) updateLoadSpec(msg tea.Msg, cmds []tea.Cmd) (App, []tea.Cmd) {
 	if key, ok := msg.(tea.KeyMsg); ok {
@@ -637,7 +847,6 @@ func (a App) updateBodyCache(msg tea.Msg, cmds []tea.Cmd) (App, []tea.Cmd) {
 			a.mode = modeNormal
 			return a, cmds
 		case "p":
-			// Promote scoped body to global
 			if item, ok := a.bodyCacheList.SelectedItem().(bodyItem); ok {
 				if a.bodyCache != nil {
 					_ = a.bodyCache.Promote(item.body.ID)
@@ -661,14 +870,13 @@ func (a App) updateBodyCache(msg tea.Msg, cmds []tea.Cmd) (App, []tea.Cmd) {
 	return a, cmds
 }
 
-// View renders the full TUI.
+// --- View ---
+
 func (a App) View() string {
 	if a.width == 0 {
 		return "Initializing..."
 	}
-
 	base := a.baseView()
-
 	switch a.mode {
 	case modeLoadSpec:
 		return a.overlayView(base, "Load Spec", a.loadSpecOverlay())
@@ -678,8 +886,9 @@ func (a App) View() string {
 		return a.overlayView(base, "New Auth Context", a.newAuthOverlay())
 	case modeBodyCache:
 		return a.overlayView(base, "Saved Bodies", a.bodyCacheOverlay())
+	case modeBaseURLOverride:
+		return a.overlayView(base, "Override Base URL", a.baseURLOverrideOverlay())
 	}
-
 	return base
 }
 
@@ -687,21 +896,24 @@ func (a App) baseView() string {
 	leftW := a.width / 3
 	rightW := a.width - leftW - 2
 
-	// title=1, statusbar=1 → body area = height-2 lines.
-	// Each pane border adds 2 (top+bottom), so inner height = body-2.
 	bodyH := a.height - 2
+
 	leftPane := a.paneStyle(paneEndpoints).Width(leftW).Height(bodyH - 2).
 		Render(a.endpointList.View())
 
-	reqInnerH := bodyH/2 - 2
-	reqPane := a.paneStyle(paneRequest).Width(rightW).Height(reqInnerH).
-		Render(a.requestView())
+	// Split right column into 3: request/params, body, response.
+	reqH := bodyH / 3
+	bodyPaneH := bodyH / 3
+	resH := bodyH - reqH - bodyPaneH
 
-	resInnerH := bodyH - bodyH/2 - 2
-	resPane := a.paneStyle(paneResponse).Width(rightW).Height(resInnerH).
+	reqPane := a.paneStyle(paneRequest).Width(rightW).Height(reqH - 2).
+		Render(a.requestView())
+	bodyPane := a.paneStyle(paneBody).Width(rightW).Height(bodyPaneH - 2).
+		Render(a.bodyPaneView())
+	resPane := a.paneStyle(paneResponse).Width(rightW).Height(resH - 2).
 		Render(a.responseView.View())
 
-	right := lipgloss.JoinVertical(lipgloss.Left, reqPane, resPane)
+	right := lipgloss.JoinVertical(lipgloss.Left, reqPane, bodyPane, resPane)
 	body := lipgloss.JoinHorizontal(lipgloss.Top, leftPane, right)
 
 	authLabel := dimStyle.Render("no auth")
@@ -709,10 +921,9 @@ func (a App) baseView() string {
 		authLabel = statusOK.Render("auth: " + a.activeAuth.Name)
 	}
 
-	statusText := a.statusMsg
-	statusStyled := dimStyle.Render(statusText)
+	statusStyled := dimStyle.Render(a.statusMsg)
 	if a.statusIsOk {
-		statusStyled = statusOK.Render(statusText)
+		statusStyled = statusOK.Render(a.statusMsg)
 	}
 
 	statusBar := lipgloss.NewStyle().Padding(0, 1).
@@ -726,23 +937,89 @@ func (a App) baseView() string {
 }
 
 func (a App) requestView() string {
-	urlLabel := labelStyle.Render("URL")
-	if a.activeInput == 0 && a.activePane == paneRequest {
-		urlLabel = statusOK.Render("▶ URL")
+	// Build a colored method badge if an endpoint is selected.
+	methodBadge := ""
+	if nav, ok := a.endpointList.SelectedItem().(NavItem); ok && nav.kind == NavKindEndpoint {
+		color, ok := methodColors[nav.ep.Method]
+		if !ok {
+			color = "255"
+		}
+		methodBadge = lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Bold(true).
+			Render(fmt.Sprintf("%-7s", nav.ep.Method))
 	}
-	bodyLabel := labelStyle.Render("Body")
-	if a.activeInput == 1 && a.activePane == paneRequest {
-		bodyLabel = statusOK.Render("▶ Body")
+
+	arrow := ""
+	if a.activeInput == 0 && a.activePane == paneRequest && a.inputFocused {
+		arrow = statusOK.Render("▶ ")
+	}
+	urlLabel := arrow + methodBadge + labelStyle.Render("URL")
+
+	paramsLabel := labelStyle.Render("Params")
+	if a.activeInput == 1 && a.activePane == paneRequest && a.inputFocused {
+		paramsLabel = statusOK.Render("▶ Params")
 	}
 
 	return lipgloss.JoinVertical(lipgloss.Left,
 		urlLabel,
 		a.urlInput.View(),
 		"",
-		bodyLabel,
-		a.bodyInput.View(),
+		paramsLabel,
+		a.paramsTableView(),
 		"",
-		dimStyle.Render("enter edit URL · i edit body · tab toggle URL/body · ctrl+r send · s save body · esc command mode"),
+		dimStyle.Render("enter URL · p params · i body · tab advance · cmd+r send · esc command"),
+	)
+}
+
+func (a App) paramsTableView() string {
+	if len(a.paramRows) == 0 {
+		return dimStyle.Render("no params · tab to add")
+	}
+
+	const sep = " │ "
+	header := fmt.Sprintf("  %-*s%sVALUE", paramKeyColW, "KEY", sep)
+	lines := []string{dimStyle.Render(header)}
+
+	for i, row := range a.paramRows {
+		focused := i == a.paramFocused && a.activeInput == 1 && a.inputFocused
+		prefix := "  "
+		if focused {
+			prefix = statusOK.Render("▶") + " "
+		}
+
+		var keyPart string
+		if row.fromSpec {
+			key := row.key
+			if len(key) > paramKeyColW {
+				key = key[:paramKeyColW]
+			}
+			style := dimStyle
+			if focused {
+				style = labelStyle
+			}
+			keyPart = style.Render(fmt.Sprintf("%-*s", paramKeyColW, key))
+		} else {
+			keyPart = row.keyInput.View()
+		}
+
+		lines = append(lines, prefix+keyPart+sep+row.value.View())
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+func (a App) bodyPaneView() string {
+	label := labelStyle.Render("Body")
+	if a.activePane == paneBody && a.inputFocused {
+		label = statusOK.Render("▶ Body")
+	}
+	hint := dimStyle.Render("enter to edit · s save · b load · esc command")
+	if a.inputFocused && a.activePane == paneBody {
+		hint = dimStyle.Render("esc command · s save · cmd+r send")
+	}
+	return lipgloss.JoinVertical(lipgloss.Left,
+		label,
+		a.bodyInput.View(),
+		hint,
 	)
 }
 
@@ -777,7 +1054,6 @@ func (a App) bodyCacheOverlay() string {
 	return a.bodyCacheList.View()
 }
 
-// overlayView centers an overlay box over the base view.
 func (a App) overlayView(base, title, content string) string {
 	box := overlayStyle.Width(a.width / 2).Render(
 		lipgloss.JoinVertical(lipgloss.Left,
@@ -786,7 +1062,6 @@ func (a App) overlayView(base, title, content string) string {
 			content,
 		),
 	)
-	// Simple placement: render overlay after base (terminal overlay is best-effort in TUI)
 	_ = base
 	return lipgloss.Place(a.width, a.height, lipgloss.Center, lipgloss.Center, box)
 }
@@ -803,22 +1078,96 @@ func (a App) recalculateSizes() App {
 	leftW := a.width/3 - 2
 	rightW := a.width - a.width/3 - 4
 
+	reqH := bodyH / 3
+	bodyPaneH := bodyH / 3
+	resH := bodyH - reqH - bodyPaneH
+
 	a.endpointList.SetSize(leftW, bodyH-4)
-	a.responseView.SetSize(rightW-2, bodyH-bodyH/2-4)
+	a.bodyInput.SetWidth(rightW - 4)
+	a.bodyInput.SetHeight(bodyPaneH - 5) // inner height minus label and hint rows
+	a.responseView.SetSize(rightW-2, resH-4)
 	a.authCtxList.SetSize(a.width/2-6, a.height/2)
 	a.bodyCacheList.SetSize(a.width/2-6, a.height/2)
+
+	// Update widths on param row inputs.
+	valW := rightW - paramKeyColW - 6
+	if valW < 10 {
+		valW = 10
+	}
+	for i := range a.paramRows {
+		a.paramRows[i].value.Width = valW
+		a.paramRows[i].keyInput.Width = paramKeyColW
+	}
+
 	return a
 }
 
 func (a App) selectedOperationID() string {
 	if nav, ok := a.endpointList.SelectedItem().(NavItem); ok && nav.kind == NavKindEndpoint {
-		return nav.ep.OperationID
+		return nav.ep.EndpointKey()
 	}
 	return ""
 }
 
+func (a App) updateBaseURLOverride(msg tea.Msg, cmds []tea.Cmd) (App, []tea.Cmd) {
+	if key, ok := msg.(tea.KeyMsg); ok {
+		switch key.String() {
+		case "esc", "q":
+			a.mode = modeNormal
+			return a, cmds
+		case "ctrl+d":
+			// Clear override — restore the spec's original base URL.
+			if a.overrideTargetIdx < len(a.loadedSpecs) {
+				s := a.loadedSpecs[a.overrideTargetIdx]
+				a.loadedSpecs[a.overrideTargetIdx].BaseURL = s.OriginalBaseURL
+				if a.cfg != nil {
+					a.cfg.ClearBaseURLOverride(s.Source)
+					_ = a.cfg.Save()
+				}
+				a.allNavItems = buildNavItems(a.loadedSpecs)
+				a.endpointList.SetItems(visibleNavItems(a.allNavItems))
+				a.statusMsg = "Base URL override cleared"
+				a.statusIsOk = true
+			}
+			a.mode = modeNormal
+			return a, cmds
+		case "enter":
+			newURL := strings.TrimRight(strings.TrimSpace(a.baseURLInput.Value()), "/")
+			if a.overrideTargetIdx < len(a.loadedSpecs) {
+				a.loadedSpecs[a.overrideTargetIdx].BaseURL = newURL
+				if a.cfg != nil {
+					a.cfg.SetBaseURLOverride(a.loadedSpecs[a.overrideTargetIdx].Source, newURL)
+					_ = a.cfg.Save()
+				}
+				a.allNavItems = buildNavItems(a.loadedSpecs)
+				a.endpointList.SetItems(visibleNavItems(a.allNavItems))
+				a.statusMsg = "Base URL updated: " + newURL
+				a.statusIsOk = true
+			}
+			a.mode = modeNormal
+			return a, cmds
+		}
+	}
+	var cmd tea.Cmd
+	a.baseURLInput, cmd = a.baseURLInput.Update(msg)
+	cmds = append(cmds, cmd)
+	return a, cmds
+}
+
+func (a App) baseURLOverrideOverlay() string {
+	spec := a.loadedSpecs[a.overrideTargetIdx]
+	lines := []string{
+		labelStyle.Render(spec.Title),
+		dimStyle.Render("Original: " + spec.OriginalBaseURL),
+		"",
+		a.baseURLInput.View(),
+		"",
+		dimStyle.Render("enter to save · ctrl+d clear override · esc cancel"),
+	}
+	return strings.Join(lines, "\n")
+}
+
 // machinePassphrase derives a stable passphrase from the hostname.
-// In a future version this could be a user-supplied master password.
 func machinePassphrase() string {
 	h, err := os.Hostname()
 	if err != nil {

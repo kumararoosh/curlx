@@ -87,6 +87,16 @@ type EndpointItem struct {
 	URL         string
 	Summary     string
 	OperationID string
+	Params      []spec.Param
+}
+
+// EndpointKey returns a stable cache key for this endpoint.
+// Uses OperationID when available, otherwise "METHOD:path".
+func (e EndpointItem) EndpointKey() string {
+	if e.OperationID != "" {
+		return e.OperationID
+	}
+	return e.Method + ":" + e.Path
 }
 
 func (e EndpointItem) Title() string {
@@ -165,6 +175,32 @@ func cmdSendRequest(a App) tea.Cmd {
 		url := a.urlInput.Value()
 		if url == "" {
 			return errMsg{fmt.Errorf("URL is empty")}
+		}
+
+		// Substitute path params and collect query params from the table.
+		var queryParts []string
+		for _, row := range a.paramRows {
+			k := row.key
+			if !row.fromSpec {
+				k = row.keyInput.Value()
+			}
+			v := row.value.Value()
+			if k == "" || v == "" {
+				continue
+			}
+			switch row.paramIn {
+			case "path":
+				url = strings.ReplaceAll(url, "{"+k+"}", v)
+			default: // "query" or custom
+				queryParts = append(queryParts, k+"="+v)
+			}
+		}
+		if len(queryParts) > 0 {
+			if strings.Contains(url, "?") {
+				url += "&" + strings.Join(queryParts, "&")
+			} else {
+				url += "?" + strings.Join(queryParts, "&")
+			}
 		}
 
 		method := "GET"
