@@ -35,8 +35,16 @@ type NavItem struct {
 }
 
 var (
-	specHeaderStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("62"))
-	folderStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("33"))
+	specHeaderStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("62"))
+	folderStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("33"))
+
+	// Selection indicator: purple left border, matching the default list delegate.
+	navSelectedStyle = lipgloss.NewStyle().
+				Border(lipgloss.NormalBorder(), false, false, false, true).
+				BorderForeground(lipgloss.AdaptiveColor{Light: "#F793FF", Dark: "#AD58B4"}).
+				Padding(0, 0, 0, 1)
+
+	navNormalStyle = lipgloss.NewStyle().Padding(0, 0, 0, 2)
 )
 
 // Title, Description, and FilterValue satisfy list.Item.
@@ -74,8 +82,18 @@ func (d navDelegate) Render(w io.Writer, m list.Model, index int, item list.Item
 		return
 	}
 
-	width := m.Width()
+	// avail is the content width after the wrap style consumes 2 chars on the left
+	// (either 2-char padding for normal, or 1-char border + 1-char padding for selected).
+	avail := m.Width() - 2
+	if avail < 0 {
+		avail = 0
+	}
 	selected := index == m.Index()
+
+	wrapStyle := navNormalStyle
+	if selected {
+		wrapStyle = navSelectedStyle
+	}
 
 	var line1, line2 string
 
@@ -85,31 +103,23 @@ func (d navDelegate) Render(w io.Writer, m list.Model, index int, item list.Item
 		if nav.collapsed {
 			arrow = "▶"
 		}
-		label := arrow + " " + nav.specTitle
-		if selected {
-			line1 = specHeaderStyle.Render(trunc(label, width))
-		} else {
-			line1 = specHeaderStyle.Copy().UnsetBold().Render(trunc(label, width))
-		}
+		line1 = specHeaderStyle.Render(trunc(arrow+" "+nav.specTitle, avail))
 
+		urlMaxW := avail * 2 / 3
 		if selected {
-			// Show URL (green if overridden) then commands, all truncated to width.
-			urlPart := nav.baseURL
+			hintMaxW := avail - urlMaxW - 2
+			var urlPart string
 			if nav.baseURL != nav.originalBaseURL {
-				urlPart = statusOK.Render(trunc(nav.baseURL, width/2)) +
-					dimStyle.Render(" (overridden)")
-				line2 = "  " + urlPart + "\n  " + dimStyle.Render(trunc("x remove · u override URL", width-2))
+				urlPart = statusOK.Render(trunc(nav.baseURL, urlMaxW)) + dimStyle.Render(" (overridden)")
 			} else {
-				line2 = "  " + dimStyle.Render(trunc(urlPart, width/2)) +
-					"  " + dimStyle.Render(trunc("x remove · u override URL", width/2-2))
+				urlPart = dimStyle.Render(trunc(nav.baseURL, urlMaxW))
 			}
+			line2 = urlPart + "  " + dimStyle.Render(trunc("x remove · u override URL", hintMaxW))
 		} else {
-			urlPart := nav.baseURL
 			if nav.baseURL != nav.originalBaseURL {
-				line2 = "  " + statusOK.Render(trunc(urlPart, width-2)) +
-					dimStyle.Render(" (overridden)")
+				line2 = statusOK.Render(trunc(nav.baseURL, urlMaxW)) + dimStyle.Render(" (overridden)")
 			} else {
-				line2 = "  " + dimStyle.Render(trunc(urlPart, width-2))
+				line2 = dimStyle.Render(trunc(nav.baseURL, avail))
 			}
 		}
 
@@ -118,16 +128,18 @@ func (d navDelegate) Render(w io.Writer, m list.Model, index int, item list.Item
 		if nav.collapsed {
 			arrow = "▶"
 		}
-		line1 = "  " + folderStyle.Render(trunc(arrow+" "+nav.folderPath, width-2))
+		// Extra 2-char indent so folders sit below the spec header.
+		line1 = "  " + folderStyle.Render(trunc(arrow+" "+nav.folderPath, avail-2))
 
 	case NavKindEndpoint:
+		// Extra 4-char indent so endpoints sit below their folder.
 		line1 = "    " + nav.ep.Title()
 		if nav.ep.Summary != "" {
-			line2 = "      " + dimStyle.Render(trunc(nav.ep.Summary, width-6))
+			line2 = "    " + dimStyle.Render(trunc(nav.ep.Summary, avail-4))
 		}
 	}
 
-	fmt.Fprintf(w, "%s\n%s", line1, line2)
+	fmt.Fprintf(w, "%s\n%s", wrapStyle.Render(line1), wrapStyle.Render(line2))
 }
 
 // trunc truncates s to maxRunes runes, appending "…" if it was cut.
