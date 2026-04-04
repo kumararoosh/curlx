@@ -6,7 +6,15 @@ import (
 	"strings"
 
 	"github.com/pb33f/libopenapi"
+	v3high "github.com/pb33f/libopenapi/datamodel/high/v3"
 )
+
+// Param represents a single path or query parameter on an endpoint.
+type Param struct {
+	Name     string
+	In       string // "path" or "query"
+	Required bool
+}
 
 // Endpoint represents a single API operation from an OpenAPI spec.
 type Endpoint struct {
@@ -15,6 +23,8 @@ type Endpoint struct {
 	Summary string
 	// OperationID is used as a stable key for the request body cache.
 	OperationID string
+	// Params holds path and query parameters defined in the spec.
+	Params []Param
 }
 
 // LoadedSpec is the parsed result of an OpenAPI document.
@@ -65,24 +75,27 @@ func parse(data []byte) (*LoadedSpec, error) {
 	}
 
 	// Walk all paths and methods.
+	// Each operation field is a *v3high.Operation; a nil pointer stored in an
+	// interface{} is not equal to nil, so we keep typed pairs to get correct
+	// nil checks.
+	type methodOp struct {
+		method string
+		op     *v3high.Operation
+	}
 	if v3.Model.Paths != nil {
 		for path, item := range v3.Model.Paths.PathItems.FromOldest() {
-			ops := map[string]interface{}{
-				"GET":    item.Get,
-				"POST":   item.Post,
-				"PUT":    item.Put,
-				"PATCH":  item.Patch,
-				"DELETE": item.Delete,
+			candidates := []methodOp{
+				{"GET", item.Get},
+				{"POST", item.Post},
+				{"PUT", item.Put},
+				{"PATCH", item.Patch},
+				{"DELETE", item.Delete},
 			}
-			for method, op := range ops {
-				if op == nil {
+			for _, c := range candidates {
+				if c.op == nil {
 					continue
 				}
-				// Use reflection-free approach via type switch.
-				ep := extractEndpoint(method, path, op)
-				if ep != nil {
-					loaded.Endpoints = append(loaded.Endpoints, *ep)
-				}
+				loaded.Endpoints = append(loaded.Endpoints, extractEndpoint(c.method, path, c.op))
 			}
 		}
 	}
@@ -90,18 +103,26 @@ func parse(data []byte) (*LoadedSpec, error) {
 	return loaded, nil
 }
 
-func extractEndpoint(method, path string, op interface{}) *Endpoint {
-	type hasFields interface {
-		GetSummary() string
-		GetOperationId() string
+func extractEndpoint(method, path string, op *v3high.Operation) Endpoint {
+	ep := Endpoint{
+		Method:      method,
+		Path:        path,
+		Summary:     op.Summary,
+		OperationID: op.OperationId,
 	}
-	if o, ok := op.(hasFields); ok {
-		return &Endpoint{
-			Method:      method,
-			Path:        path,
-			Summary:     o.GetSummary(),
-			OperationID: o.GetOperationId(),
+	for _, p := range op.Parameters {
+		if p == nil {
+			continue
 		}
+		required := p.In == "path" // path params are implicitly required
+		if p.Required != nil {
+			required = *p.Required
+		}
+		ep.Params = append(ep.Params, Param{
+			Name:     p.Name,
+			In:       p.In,
+			Required: required,
+		})
 	}
-	return &Endpoint{Method: method, Path: path}
+	return ep
 }
