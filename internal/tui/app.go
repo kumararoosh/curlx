@@ -226,7 +226,7 @@ func NewApp() App {
 		authStore:     store,
 		bodyCache:     bodyCache,
 		cfg:       cfg,
-		statusMsg: "l load spec · a auth · b bodies · tab switch pane · cmd+r send",
+		statusMsg: "l load spec · a auth · b bodies · tab switch pane · ctrl+r / opt+r send",
 	}
 }
 
@@ -341,7 +341,7 @@ func (a App) updateNormal(msg tea.Msg, cmds []tea.Cmd) (App, []tea.Cmd) {
 				a.urlInput.Blur()
 				a = a.blurAllParamRows()
 				a.bodyInput.Blur()
-				a.statusMsg = "Command mode · tab to switch pane · ctrl+r / cmd+r to send"
+				a.statusMsg = "Command mode · tab to switch pane · ctrl+r / opt+r to send"
 				return a, cmds
 			case "tab":
 				if a.activePane == paneBody {
@@ -426,7 +426,7 @@ func (a App) updateNormal(msg tea.Msg, cmds []tea.Cmd) (App, []tea.Cmd) {
 				}
 			}
 
-		case "ctrl+r", "super+r":
+		case "ctrl+r", "alt+r":
 			if a.activePane == paneRequest || a.activePane == paneBody {
 				return a, append(cmds, cmdSendRequest(a))
 			}
@@ -966,7 +966,7 @@ func (a App) requestView() string {
 		paramsLabel,
 		a.paramsTableView(),
 		"",
-		dimStyle.Render("enter URL · p params · i body · tab advance · cmd+r send · esc command"),
+		dimStyle.Render("enter URL · p params · i body · tab advance · ctrl+r / opt+r send · esc command"),
 	)
 }
 
@@ -1014,7 +1014,7 @@ func (a App) bodyPaneView() string {
 	}
 	hint := dimStyle.Render("enter to edit · s save · b load · esc command")
 	if a.inputFocused && a.activePane == paneBody {
-		hint = dimStyle.Render("esc command · s save · cmd+r send")
+		hint = dimStyle.Render("esc command · s save · ctrl+r / opt+r send")
 	}
 	return lipgloss.JoinVertical(lipgloss.Left,
 		label,
