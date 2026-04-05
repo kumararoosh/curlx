@@ -2,9 +2,11 @@ package tui
 
 import (
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/arooshkumar/curlx/internal/spec"
@@ -21,59 +23,138 @@ const (
 
 // NavItem is a list.Item that represents a node in the spec tree.
 type NavItem struct {
-	kind       NavItemKind
-	specIdx    int
-	specTitle  string
-	specSource string
-	folderPath string
-	collapsed  bool
-	ep         *EndpointItem
+	kind            NavItemKind
+	specIdx         int
+	specTitle       string
+	specSource      string
+	baseURL         string
+	originalBaseURL string
+	folderPath      string
+	collapsed       bool
+	ep              *EndpointItem
 }
 
 var (
-	specHeaderStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("62"))
-	folderStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("33"))
+	specHeaderStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("62"))
+	folderStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("33"))
+
+	// Selection indicator: purple left border, matching the default list delegate.
+	navSelectedStyle = lipgloss.NewStyle().
+				Border(lipgloss.NormalBorder(), false, false, false, true).
+				BorderForeground(lipgloss.AdaptiveColor{Light: "#F793FF", Dark: "#AD58B4"}).
+				Padding(0, 0, 0, 1)
+
+	navNormalStyle = lipgloss.NewStyle().Padding(0, 0, 0, 2)
 )
 
+// Title, Description, and FilterValue satisfy list.Item.
+// Rendering is handled by navDelegate; these are used only for filtering.
 func (n NavItem) Title() string {
 	switch n.kind {
-	case NavKindSpec:
-		arrow := "▼"
-		if n.collapsed {
-			arrow = "▶"
-		}
-		return specHeaderStyle.Render(arrow+" "+n.specTitle) + dimStyle.Render("  x to remove")
-	case NavKindFolder:
-		arrow := "▼"
-		if n.collapsed {
-			arrow = "▶"
-		}
-		return "  " + folderStyle.Render(arrow+" "+n.folderPath)
 	case NavKindEndpoint:
-		return "    " + n.ep.Title()
-	}
-	return ""
-}
-
-func (n NavItem) Description() string {
-	if n.kind == NavKindEndpoint && n.ep.Summary != "" {
-		return "      " + dimStyle.Render(n.ep.Summary)
-	}
-	if n.kind == NavKindSpec {
-		return "    " + dimStyle.Render(n.specSource)
-	}
-	return ""
-}
-
-func (n NavItem) FilterValue() string {
-	switch n.kind {
-	case NavKindEndpoint:
-		return n.ep.FilterValue()
+		return n.ep.Method + " " + n.ep.Path
 	case NavKindFolder:
 		return n.folderPath
 	default:
 		return n.specTitle
 	}
+}
+func (n NavItem) Description() string { return "" }
+func (n NavItem) FilterValue() string  { return n.Title() }
+
+// --- Custom delegate ---
+
+// navDelegate renders NavItems with explicit truncation and per-item layouts
+// so hints never overflow the pane width.
+type navDelegate struct{}
+
+func newNavDelegate() navDelegate { return navDelegate{} }
+
+// Height is 2: one line for the main label, one for the detail/hint line.
+func (d navDelegate) Height() int  { return 2 }
+func (d navDelegate) Spacing() int { return 0 }
+
+func (d navDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd { return nil }
+
+func (d navDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
+	nav, ok := item.(NavItem)
+	if !ok {
+		return
+	}
+
+	// avail is the content width after the wrap style consumes 2 chars on the left
+	// (either 2-char padding for normal, or 1-char border + 1-char padding for selected).
+	avail := m.Width() - 2
+	if avail < 0 {
+		avail = 0
+	}
+	selected := index == m.Index()
+
+	wrapStyle := navNormalStyle
+	if selected {
+		wrapStyle = navSelectedStyle
+	}
+
+	var line1, line2 string
+
+	switch nav.kind {
+	case NavKindSpec:
+		arrow := "▼"
+		if nav.collapsed {
+			arrow = "▶"
+		}
+		line1 = specHeaderStyle.Render(trunc(arrow+" "+nav.specTitle, avail))
+
+		urlMaxW := avail * 2 / 3
+		if selected {
+			hintMaxW := avail - urlMaxW - 2
+			var urlPart string
+			if nav.baseURL != nav.originalBaseURL {
+				urlPart = statusOK.Render(trunc(nav.baseURL, urlMaxW)) + dimStyle.Render(" (overridden)")
+			} else {
+				urlPart = dimStyle.Render(trunc(nav.baseURL, urlMaxW))
+			}
+			line2 = urlPart + "  " + dimStyle.Render(trunc("x remove · u override URL", hintMaxW))
+		} else {
+			if nav.baseURL != nav.originalBaseURL {
+				line2 = statusOK.Render(trunc(nav.baseURL, urlMaxW)) + dimStyle.Render(" (overridden)")
+			} else {
+				line2 = dimStyle.Render(trunc(nav.baseURL, avail))
+			}
+		}
+
+	case NavKindFolder:
+		arrow := "▼"
+		if nav.collapsed {
+			arrow = "▶"
+		}
+		// Extra 2-char indent so folders sit below the spec header.
+		line1 = "  " + folderStyle.Render(trunc(arrow+" "+nav.folderPath, avail-2))
+
+	case NavKindEndpoint:
+		// Extra 4-char indent so endpoints sit below their folder.
+		line1 = "    " + nav.ep.Title()
+		if nav.ep.Summary != "" {
+			line2 = "    " + dimStyle.Render(trunc(nav.ep.Summary, avail-4))
+		}
+	}
+
+	fmt.Fprintf(w, "%s\n%s", wrapStyle.Render(line1), wrapStyle.Render(line2))
+}
+
+// trunc truncates s to maxRunes runes, appending "…" if it was cut.
+func trunc(s string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= maxRunes {
+		return s
+	}
+	if maxRunes == 1 {
+		return "…"
+	}
+	return string(r[:maxRunes-1]) + "…"
 }
 
 // buildNavItems constructs the full (unfiltered) tree from all loaded specs.
@@ -81,10 +162,12 @@ func buildNavItems(specs []*spec.LoadedSpec) []NavItem {
 	var all []NavItem
 	for i, s := range specs {
 		all = append(all, NavItem{
-			kind:       NavKindSpec,
-			specIdx:    i,
-			specTitle:  s.Title,
-			specSource: s.Source,
+			kind:            NavKindSpec,
+			specIdx:         i,
+			specTitle:       s.Title,
+			specSource:      s.Source,
+			baseURL:         s.BaseURL,
+			originalBaseURL: s.OriginalBaseURL,
 		})
 
 		// Group endpoints by the first path segment.
@@ -119,6 +202,7 @@ func buildNavItems(specs []*spec.LoadedSpec) []NavItem {
 					URL:         s.BaseURL + ep.Path,
 					Summary:     ep.Summary,
 					OperationID: ep.OperationID,
+					Params:      ep.Params,
 				}
 				all = append(all, NavItem{
 					kind:    NavKindEndpoint,

@@ -12,7 +12,7 @@ import (
 func main() {
 	p := tea.NewProgram(
 		tui.NewApp(),
-		tea.WithMouseCellMotion(),
+		tea.WithAltScreen(),
 	)
 
 	if _, err := p.Run(); err != nil {

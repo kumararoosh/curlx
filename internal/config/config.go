@@ -10,7 +10,30 @@ import (
 
 // Config holds persistent user preferences.
 type Config struct {
-	SpecSources []string `json:"spec_sources"`
+	SpecSources      []string          `json:"spec_sources"`
+	BaseURLOverrides map[string]string `json:"base_url_overrides,omitempty"`
+}
+
+// SetBaseURLOverride stores a base URL override for the given spec source.
+func (c *Config) SetBaseURLOverride(source, url string) {
+	if c.BaseURLOverrides == nil {
+		c.BaseURLOverrides = make(map[string]string)
+	}
+	c.BaseURLOverrides[source] = url
+}
+
+// ClearBaseURLOverride removes any base URL override for the given spec source.
+func (c *Config) ClearBaseURLOverride(source string) {
+	delete(c.BaseURLOverrides, source)
+}
+
+// GetBaseURLOverride returns the override URL for a spec source, if one exists.
+func (c *Config) GetBaseURLOverride(source string) (string, bool) {
+	if c.BaseURLOverrides == nil {
+		return "", false
+	}
+	v, ok := c.BaseURLOverrides[source]
+	return v, ok
 }
 
 func configPath() string {
