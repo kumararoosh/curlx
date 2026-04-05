@@ -369,6 +369,16 @@ func (a App) updateNormal(msg tea.Msg, cmds []tea.Cmd) (App, []tea.Cmd) {
 					}
 					return a, cmds
 				}
+			case "up":
+				if a.activeInput == 1 {
+					a = a.moveParamRowUp()
+					return a, cmds
+				}
+			case "down":
+				if a.activeInput == 1 {
+					a = a.moveParamRowDown()
+					return a, cmds
+				}
 			}
 		}
 		// Forward to active input
@@ -495,7 +505,7 @@ func (a App) updateNormal(msg tea.Msg, cmds []tea.Cmd) (App, []tea.Cmd) {
 				a.urlInput.Blur()
 				a.bodyInput.Blur()
 				a = a.syncParamRowFocus()
-				a.statusMsg = "Params mode · tab advance · d delete · esc command mode"
+				a.statusMsg = "Params mode · ↑↓ navigate · tab advance · d delete · esc command mode"
 			}
 
 		case "i":
@@ -686,6 +696,38 @@ func (a App) retreatParamFocus() App {
 		a.paramFocused--
 		a.paramSubFocus = 1
 		a.paramRows[a.paramFocused].value.Focus()
+	}
+	return a
+}
+
+func (a App) moveParamRowDown() App {
+	if a.paramFocused >= len(a.paramRows)-1 {
+		return a
+	}
+	a = a.blurAllParamRows()
+	a.paramFocused++
+	if a.paramRows[a.paramFocused].fromSpec {
+		a.paramSubFocus = 1
+		a.paramRows[a.paramFocused].value.Focus()
+	} else {
+		a.paramSubFocus = 0
+		a.paramRows[a.paramFocused].keyInput.Focus()
+	}
+	return a
+}
+
+func (a App) moveParamRowUp() App {
+	if a.paramFocused <= 0 {
+		return a
+	}
+	a = a.blurAllParamRows()
+	a.paramFocused--
+	if a.paramRows[a.paramFocused].fromSpec {
+		a.paramSubFocus = 1
+		a.paramRows[a.paramFocused].value.Focus()
+	} else {
+		a.paramSubFocus = 0
+		a.paramRows[a.paramFocused].keyInput.Focus()
 	}
 	return a
 }
