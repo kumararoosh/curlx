@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/reflow/wordwrap"
 
 	"github.com/arooshkumar/curlx/internal/auth"
 	"github.com/arooshkumar/curlx/internal/cache"
@@ -172,7 +173,7 @@ func NewApp() App {
 
 	// Auth context list overlay
 	al := list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0)
-	al.Title = "Auth Contexts  (enter to select · A to add)"
+	al.Title = "Auth Contexts"
 	al.SetShowStatusBar(false)
 	al.KeyMap.Quit.SetEnabled(false)
 
@@ -188,7 +189,7 @@ func NewApp() App {
 
 	// Body cache list overlay
 	bc := list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0)
-	bc.Title = "Saved Bodies  (enter to load · s to save current)"
+	bc.Title = "Saved Bodies"
 	bc.SetShowStatusBar(false)
 	bc.KeyMap.Quit.SetEnabled(false)
 
@@ -225,7 +226,7 @@ func NewApp() App {
 		authStore:     store,
 		bodyCache:     bodyCache,
 		cfg:       cfg,
-		statusMsg: "l load spec · a auth · b bodies · tab switch pane · cmd+r send",
+		statusMsg: "l load spec · a auth · b bodies · tab switch pane · ctrl+r / opt+r send",
 	}
 }
 
@@ -340,7 +341,7 @@ func (a App) updateNormal(msg tea.Msg, cmds []tea.Cmd) (App, []tea.Cmd) {
 				a.urlInput.Blur()
 				a = a.blurAllParamRows()
 				a.bodyInput.Blur()
-				a.statusMsg = "Command mode · tab to switch pane · ctrl+r to send"
+				a.statusMsg = "Command mode · tab to switch pane · ctrl+r / opt+r to send"
 				return a, cmds
 			case "tab":
 				if a.activePane == paneBody {
@@ -425,7 +426,7 @@ func (a App) updateNormal(msg tea.Msg, cmds []tea.Cmd) (App, []tea.Cmd) {
 				}
 			}
 
-		case "ctrl+r", "super+r":
+		case "ctrl+r", "alt+r":
 			if a.activePane == paneRequest || a.activePane == paneBody {
 				return a, append(cmds, cmdSendRequest(a))
 			}
@@ -878,15 +879,15 @@ func (a App) View() string {
 	base := a.baseView()
 	switch a.mode {
 	case modeLoadSpec:
-		return a.overlayView(base, "Load Spec", a.loadSpecOverlay())
+		return a.overlayView(base, "Load Spec", "", a.loadSpecOverlay())
 	case modeAuthSwitch:
-		return a.overlayView(base, "Auth Contexts", a.authSwitchOverlay())
+		return a.overlayView(base, "Auth Contexts", "enter to select · A to add", a.authSwitchOverlay())
 	case modeNewAuth:
-		return a.overlayView(base, "New Auth Context", a.newAuthOverlay())
+		return a.overlayView(base, "New Auth Context", "", a.newAuthOverlay())
 	case modeBodyCache:
-		return a.overlayView(base, "Saved Bodies", a.bodyCacheOverlay())
+		return a.overlayView(base, "Saved Bodies", "enter to load · s to save current", a.bodyCacheOverlay())
 	case modeBaseURLOverride:
-		return a.overlayView(base, "Override Base URL", a.baseURLOverrideOverlay())
+		return a.overlayView(base, "Override Base URL", "", a.baseURLOverrideOverlay())
 	}
 	return base
 }
@@ -965,7 +966,7 @@ func (a App) requestView() string {
 		paramsLabel,
 		a.paramsTableView(),
 		"",
-		dimStyle.Render("enter URL · p params · i body · tab advance · cmd+r send · esc command"),
+		dimStyle.Render("enter URL · p params · i body · tab advance · ctrl+r / opt+r send · esc command"),
 	)
 }
 
@@ -1013,7 +1014,7 @@ func (a App) bodyPaneView() string {
 	}
 	hint := dimStyle.Render("enter to edit · s save · b load · esc command")
 	if a.inputFocused && a.activePane == paneBody {
-		hint = dimStyle.Render("esc command · s save · cmd+r send")
+		hint = dimStyle.Render("esc command · s save · ctrl+r / opt+r send")
 	}
 	return lipgloss.JoinVertical(lipgloss.Left,
 		label,
@@ -1053,13 +1054,18 @@ func (a App) bodyCacheOverlay() string {
 	return a.bodyCacheList.View()
 }
 
-func (a App) overlayView(base, title, content string) string {
+func (a App) overlayView(base, title, hint, content string) string {
+	innerW := a.width/2 - 8
+	if innerW < 1 {
+		innerW = 1
+	}
+	rows := []string{titleStyle.Render(title), ""}
+	if hint != "" {
+		rows = append(rows, dimStyle.Render(wordwrap.String(hint, innerW)), "")
+	}
+	rows = append(rows, content)
 	box := overlayStyle.Width(a.width / 2).Render(
-		lipgloss.JoinVertical(lipgloss.Left,
-			titleStyle.Render(title),
-			"",
-			content,
-		),
+		lipgloss.JoinVertical(lipgloss.Left, rows...),
 	)
 	_ = base
 	return lipgloss.Place(a.width, a.height, lipgloss.Center, lipgloss.Center, box)
